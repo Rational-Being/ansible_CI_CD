@@ -1,0 +1,116 @@
+---
+- name: Deploy and configure CI environment on Ubuntu
+  hosts: all
+  become: true
+  vars:
+    app_user: deploy
+    db_user: admin
+
+  tasks:
+    # Install necessary packages (PHP and its dependencies)
+    - name: Install PHP and required modules
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      with_items:
+        - php
+        - php-opcache
+        - php-gd
+        - php-curl
+        - php-mysqlnd
+      when: inventory_hostname in groups['tooling'] or inventory_hostname in groups['todo']
+
+    # Start PHP-FPM service and enable it on both Todo and Tooling servers
+    - name: Start and enable PHP-FPM
+      systemd:
+        name: php7.4-fpm  # Adjust PHP version as needed
+        state: started
+        enabled: true
+      when: inventory_hostname in groups['tooling'] or inventory_hostname in groups['todo']
+
+- name: Configure Todo Web Server
+  hosts: todo
+  tasks:
+    # Clone the Todo app repository
+    - name: Clone Todo app from GitHub
+      git:
+        repo: https://github.com/<user>/<todo-repo>.git
+        dest: /var/www/todo
+        version: main  # Or specify the correct branch/tag
+
+    - name: Set correct permissions for Todo app
+      file:
+        path: /var/www/todo
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+        recurse: yes
+
+    - name: Deploy Nginx configuration for Todo
+      template:
+        src: nginx-todo.j2
+        dest: /etc/nginx/sites-available/default
+
+    - name: Ensure Nginx is restarted
+      systemd:
+        name: nginx
+        state: restarted
+
+- name: Configure Tooling Web Server
+  hosts: tooling
+  tasks:
+    # Clone Tooling app from GitHub, specifically the "html" folder to /var/www/html
+    - name: Clone Tooling app from GitHub (html folder)
+      git:
+        repo: https://github.com/<user>/<tooling-repo>.git
+        dest: /var/www/html
+        version: main
+        recursive: yes  # Ensure we get submodules if needed (optional)
+
+    - name: Set correct permissions for Tooling app
+      file:
+        path: /var/www/html
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+        recurse: yes
+
+    - name: Deploy Nginx configuration for Tooling
+      template:
+        src: nginx-tooling.j2
+        dest: /etc/nginx/sites-available/default
+
+    - name: Ensure Nginx is restarted
+      systemd:
+        name: nginx
+        state: restarted
+
+- name: Configure Database Server
+  hosts: db
+  tasks:
+    - name: Install MySQL server
+      apt:
+        name: mysql-server
+        state: present
+        update_cache: yes
+
+    - name: Ensure MySQL service is running
+      systemd:
+        name: mysql
+        state: started
+        enabled: true
+
+    - name: Create tooling database and user
+      mysql_db:
+        name: tooling_db
+        state: present
+
+    - name: Ensure MySQL user exists for Tooling
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "securepassword"
+        priv: 'tooling_db.*:ALL'
+        state: present
